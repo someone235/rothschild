@@ -132,7 +132,7 @@ func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 
 	const amountPerOutput = uint64(5 * feeAmount)
 	sendAmount := amountPerOutput
-	if len(availableUTXOs) < 1000 {
+	if len(availableUTXOs) < 10e3 {
 		sendAmount *= 40
 	}
 	totalSendAmount := sendAmount + feeAmount
@@ -219,7 +219,7 @@ func isUTXOSpendable(entry *appmessage.UTXOsByAddressesEntry, virtualSelectedPar
 		return blockDAAScore+minConfirmations < virtualSelectedParentBlueScore
 	}
 	coinbaseMaturity := activeConfig().ActiveNetParams.BlockCoinbaseMaturity
-	return blockDAAScore+coinbaseMaturity < virtualSelectedParentBlueScore
+	return blockDAAScore+coinbaseMaturity+10 < virtualSelectedParentBlueScore
 }
 
 func updateState(availableUTXOs map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry,

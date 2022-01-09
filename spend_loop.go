@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -41,6 +42,8 @@ func spendLoop(client *rpcclient.RPCClient, addresses *addressesList,
 			panic(err)
 		}
 
+		log.Infof("Num spendable UTXOs: %d", len(utxos))
+
 		cfg := activeConfig()
 		ticker := time.NewTicker(time.Duration(cfg.TransactionInterval) * time.Millisecond)
 		for range ticker.C {
@@ -70,6 +73,7 @@ func spendLoop(client *rpcclient.RPCClient, addresses *addressesList,
 				if err != nil {
 					panic(err)
 				}
+				log.Infof("Num spendable UTXOs: %d", len(utxos))
 			}
 
 			if atomic.LoadInt32(&shutdown) != 0 {
@@ -126,13 +130,14 @@ var stats struct {
 func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 	availableUTXOs map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry) (hasFunds bool, err error) {
 
-	sendAmount := randomizeSpendAmount()
+	const amountPerOutput = uint64(5 * feeAmount)
+	sendAmount := amountPerOutput
+	if len(availableUTXOs) < 1000 {
+		sendAmount *= 40
+	}
 	totalSendAmount := sendAmount + feeAmount
 
-	selectedUTXOs, selectedValue, err := selectUTXOs(availableUTXOs, totalSendAmount)
-	if err != nil {
-		return false, err
-	}
+	selectedUTXOs, selectedValue := selectUTXOs(availableUTXOs, totalSendAmount)
 
 	if len(selectedUTXOs) == 0 {
 		return false, nil
@@ -145,12 +150,11 @@ func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 		sendAmount = selectedValue - feeAmount
 	}
 
-	change := selectedValue - sendAmount - feeAmount
-
 	spendAddress := randomizeSpendAddress(addresses)
 
+	numOutputs := uint64(math.Max(float64(sendAmount/amountPerOutput), 1))
 	rpcTransaction, err := generateTransaction(
-		addresses.myPrivateKey, selectedUTXOs, sendAmount, change, spendAddress, addresses.myAddress)
+		addresses.myPrivateKey, selectedUTXOs, sendAmount, numOutputs, spendAddress)
 	if err != nil {
 		return false, err
 	}
@@ -261,7 +265,7 @@ func randomizeSpendAmount() uint64 {
 }
 
 func selectUTXOs(utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry, amountToSend uint64) (
-	selectedUTXOs []*appmessage.UTXOsByAddressesEntry, selectedValue uint64, err error) {
+	selectedUTXOs []*appmessage.UTXOsByAddressesEntry, selectedValue uint64) {
 
 	selectedUTXOs = []*appmessage.UTXOsByAddressesEntry{}
 	selectedValue = uint64(0)
@@ -286,12 +290,11 @@ func selectUTXOs(utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry, amou
 		}
 	}
 
-	return selectedUTXOs, selectedValue, nil
+	return selectedUTXOs, selectedValue
 }
 
 func generateTransaction(keyPair *secp256k1.SchnorrKeyPair, selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
-	sompisToSend uint64, change uint64, toAddress util.Address,
-	fromAddress util.Address) (*appmessage.RPCTransaction, error) {
+	sompisToSend uint64, numOutputs uint64, toAddress util.Address) (*appmessage.RPCTransaction, error) {
 
 	inputs := make([]*externalapi.DomainTransactionInput, len(selectedUTXOs))
 	for i, utxo := range selectedUTXOs {
@@ -331,21 +334,19 @@ func generateTransaction(keyPair *secp256k1.SchnorrKeyPair, selectedUTXOs []*app
 	if err != nil {
 		return nil, err
 	}
-	mainOutput := &externalapi.DomainTransactionOutput{
-		Value:           sompisToSend,
-		ScriptPublicKey: toScript,
-	}
-	fromScript, err := txscript.PayToAddrScript(fromAddress)
-	if err != nil {
-		return nil, err
-	}
-	outputs := []*externalapi.DomainTransactionOutput{mainOutput}
-	if change > 0 {
-		changeOutput := &externalapi.DomainTransactionOutput{
-			Value:           change,
-			ScriptPublicKey: fromScript,
+	outputs := []*externalapi.DomainTransactionOutput{}
+	sompisLeft := sompisToSend
+	outputValue := sompisLeft / numOutputs
+	for sompisLeft != 0 {
+		currentOutputValue := outputValue
+		if outputValue > sompisLeft {
+			currentOutputValue = sompisLeft
 		}
-		outputs = append(outputs, changeOutput)
+		outputs = append(outputs, &externalapi.DomainTransactionOutput{
+			Value:           currentOutputValue,
+			ScriptPublicKey: toScript,
+		})
+		sompisLeft -= currentOutputValue
 	}
 
 	domainTransaction := &externalapi.DomainTransaction{

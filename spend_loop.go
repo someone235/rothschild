@@ -155,6 +155,11 @@ func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 		return false, err
 	}
 
+	if rpcTransaction.Outputs[0].Amount == 0 {
+		log.Warnf("Got transaction with 0 value output")
+		return false, nil
+	}
+
 	spawn("sendTransaction", func() {
 		transactionID, err := sendTransaction(client, rpcTransaction)
 		if err != nil {

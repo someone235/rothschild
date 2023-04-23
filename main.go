@@ -56,7 +56,15 @@ func main() {
 		panic(err)
 	}
 
-	spendLoopDoneChan := spendLoop(client, addresses, utxosChangedNotificationChan)
+	blockAddedNtfnChan := make(chan *appmessage.BlockAddedNotificationMessage, 100)
+	err = client.RegisterForBlockAddedNotifications(func(notification *appmessage.BlockAddedNotificationMessage) {
+		blockAddedNtfnChan <- notification
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	spendLoopDoneChan := spendLoop(client, addresses, blockAddedNtfnChan)
 
 	<-interrupt
 
